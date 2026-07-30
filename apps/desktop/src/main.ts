@@ -67,6 +67,7 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import * as VoiceBudBridge from "./voicebud/VoiceBudBridge.ts";
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -197,6 +198,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopLinuxUrlHandler.layer,
   DesktopShellEnvironment.layer,
   desktopSshLayer,
+  VoiceBudBridge.layer,
 ).pipe(
   Layer.provideMerge(desktopSnapShotLayer),
   Layer.provideMerge(DesktopUpdates.layer),

@@ -32,6 +32,7 @@ import * as DesktopRemoteUpdates from "../updates/DesktopRemoteUpdates.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
+import * as VoiceBudBridge from "../voicebud/VoiceBudBridge.ts";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const MAX_TCP_PORT = 65_535;
@@ -164,6 +165,7 @@ const bootstrap = Effect.gen(function* () {
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
   const appActivation = yield* DesktopAppActivation.DesktopAppActivation;
+  const voiceBudBridge = yield* VoiceBudBridge.VoiceBudBridge;
   yield* logBootstrapInfo("bootstrap start");
 
   const settings = yield* desktopSettings.get;
@@ -233,6 +235,13 @@ const bootstrap = Effect.gen(function* () {
       "bootstrap fell back to local-only because no advertised network host was available",
     );
   }
+  yield* voiceBudBridge.start.pipe(
+    Effect.catch((error) =>
+      logBootstrapWarning("VoiceBud local bridge unavailable", {
+        message: error.message,
+      }),
+    ),
+  );
 
   if (!(yield* Ref.get(state.quitting))) {
     // The main window waits for the primary backend. In wsl-only mode that is
