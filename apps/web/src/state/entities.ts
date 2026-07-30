@@ -236,6 +236,10 @@ export function readEnvironmentSupportsActiveReorder(environmentId: EnvironmentI
   );
 }
 
+export function readThreadStatus(ref: ScopedThreadRef): EnvironmentThreadStatus {
+  return appAtomRegistry.get(environmentThreadDetails.statusAtom(ref));
+}
+
 export function readEnvironmentThreadRefs(
   environmentId: EnvironmentId,
 ): ReadonlyArray<ScopedThreadRef> {
