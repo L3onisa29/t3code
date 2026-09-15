@@ -1,6 +1,7 @@
 import { describe, it, assert } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type BackgroundPolicySnapshot,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -221,6 +222,111 @@ describe("makeManagedServerProvider", () => {
         assert.strictEqual(yield* Ref.get(checkCalls), 1);
       }),
     ).pipe(Effect.provide(Layer.mergeAll(NeverRunTestLayer, TestClock.layer()))),
+  );
+
+  it.effect("discards a periodic result after demand ends and refreshes when demand returns", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const demand = yield* Ref.make(true);
+        const policySnapshot = {
+          hostPower: {
+            source: "unknown",
+            idle: "unknown",
+            idleSeconds: null,
+            locked: "unknown",
+            suspended: false,
+            onBattery: "unknown",
+            lowPowerMode: "unknown",
+            thermalState: "unknown",
+            stale: true,
+            updatedAt: TEST_EPOCH,
+          },
+          leases: [],
+          activeForegroundLeaseCount: 0,
+          activeScopeKeys: [],
+          shouldRunOpportunisticWork: true,
+          updatedAt: TEST_EPOCH,
+        } satisfies BackgroundPolicySnapshot;
+        const policyChanges = yield* PubSub.unbounded<BackgroundPolicySnapshot>();
+        const discardedResultObserved = yield* Deferred.make<void>();
+        const initialCheckDone = yield* Deferred.make<void>();
+        const periodicCheckStarted = yield* Deferred.make<void>();
+        const releasePeriodicCheck = yield* Deferred.make<void>();
+        const recoveryCheckDone = yield* Deferred.make<void>();
+        const checkCalls = yield* Ref.make(0);
+        const backgroundPolicyLayer = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+          reportClientActivity: () => Effect.void,
+          removeRpcClient: () => Effect.void,
+          reportHostPowerState: () => Effect.void,
+          snapshot: Effect.die(new Error("unused in test")),
+          streamChanges: Stream.fromPubSub(policyChanges),
+          hasDemand: () => Ref.get(demand),
+          shouldRunScopeWork: () =>
+            Ref.get(demand).pipe(
+              Effect.tap((current) =>
+                current
+                  ? Effect.void
+                  : Deferred.succeed(discardedResultObserved, undefined).pipe(Effect.ignore),
+              ),
+            ),
+          shouldRunOpportunisticWork: Ref.get(demand),
+        });
+        const timedOutSnapshot: ServerProvider = {
+          ...refreshedSnapshot,
+          status: "error",
+          auth: { status: "unknown" },
+          checkedAt: "2026-04-10T00:00:02.000Z",
+          message: "Timed out while checking provider status.",
+        };
+
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(checkCalls, (count) => count + 1).pipe(
+            Effect.flatMap((count) => {
+              if (count === 1) {
+                return Deferred.succeed(initialCheckDone, undefined).pipe(
+                  Effect.as(refreshedSnapshot),
+                );
+              }
+              if (count === 2) {
+                return Deferred.succeed(periodicCheckStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releasePeriodicCheck)),
+                  Effect.as(timedOutSnapshot),
+                );
+              }
+              return Deferred.succeed(recoveryCheckDone, undefined).pipe(
+                Effect.as(refreshedSnapshotSecond),
+              );
+            }),
+          ),
+          refreshInterval: "1 second",
+        }).pipe(Effect.provide(Layer.mergeAll(backgroundPolicyLayer, ServerSettingsTestLayer)));
+
+        yield* Deferred.await(initialCheckDone);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("1 second");
+        yield* Deferred.await(periodicCheckStarted);
+
+        yield* Ref.set(demand, false);
+        yield* PubSub.publish(policyChanges, policySnapshot);
+        yield* Deferred.succeed(releasePeriodicCheck, undefined);
+        yield* Deferred.await(discardedResultObserved);
+
+        assert.deepStrictEqual(yield* provider.getSnapshot, refreshedSnapshot);
+
+        yield* Ref.set(demand, true);
+        yield* PubSub.publish(policyChanges, policySnapshot);
+        yield* Deferred.await(recoveryCheckDone);
+        yield* Effect.yieldNow;
+
+        assert.deepStrictEqual(yield* provider.getSnapshot, refreshedSnapshotSecond);
+        assert.strictEqual(yield* Ref.get(checkCalls), 3);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("disables periodic provider refreshes when the explicit interval is zero", () =>

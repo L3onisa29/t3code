@@ -74,7 +74,18 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   });
   const settingsRef = yield* Ref.make(initialSettings);
   const enrichmentFiberRef = yield* Ref.make<Fiber.Fiber<void, unknown> | null>(null);
+  const deferredDemandRefreshRef = yield* Ref.make(false);
   const scope = yield* Effect.scope;
+
+  const hasProviderStatusDemand = Effect.gen(function* () {
+    const state = yield* Ref.get(snapshotStateRef);
+    const instanceId = state.snapshot.instanceId;
+    const [genericDemand, instanceDemand] = yield* Effect.all([
+      backgroundPolicy.shouldRunScopeWork({ type: "provider-status" }),
+      backgroundPolicy.shouldRunScopeWork({ type: "provider-status", instanceId }),
+    ]);
+    return genericDemand || instanceDemand;
+  });
 
   const publishEnrichedSnapshot = Effect.fn("publishEnrichedSnapshot")(function* (
     generation: number,
@@ -126,7 +137,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   const applySnapshotBase = Effect.fn("applySnapshot")(function* (
     nextSettings: Settings,
-    options?: { readonly forceRefresh?: boolean },
+    options?: {
+      readonly deferWhenDemandEnds?: boolean;
+      readonly forceRefresh?: boolean;
+    },
   ) {
     const forceRefresh = options?.forceRefresh === true;
     const previousSettings = yield* Ref.get(settingsRef);
@@ -151,6 +165,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     }
 
     const probedSnapshot = yield* input.checkProvider;
+    if (options?.deferWhenDemandEnds === true && !(yield* hasProviderStatusDemand)) {
+      yield* Ref.set(deferredDemandRefreshRef, true);
+      return yield* Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot));
+    }
     const { snapshot: nextSnapshot, generation: nextGeneration } = yield* Ref.modify(
       snapshotStateRef,
       (state) => {
@@ -170,13 +188,19 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         ] as const;
       },
     );
+    yield* Ref.set(deferredDemandRefreshRef, false);
     yield* Ref.set(settingsRef, nextSettings);
     yield* PubSub.publish(changesPubSub, nextSnapshot);
     yield* restartSnapshotEnrichment(nextSettings, nextSnapshot, nextGeneration);
     return nextSnapshot;
   });
-  const applySnapshot = (nextSettings: Settings, options?: { readonly forceRefresh?: boolean }) =>
-    refreshSemaphore.withPermits(1)(applySnapshotBase(nextSettings, options));
+  const applySnapshot = (
+    nextSettings: Settings,
+    options?: {
+      readonly deferWhenDemandEnds?: boolean;
+      readonly forceRefresh?: boolean;
+    },
+  ) => refreshSemaphore.withPermits(1)(applySnapshotBase(nextSettings, options));
 
   /**
    * Runtime usage updates arrive between probes. They patch only
@@ -204,19 +228,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       }
     });
 
-  const refreshSnapshot = Effect.fn("refreshSnapshot")(function* () {
+  const refreshSnapshot = Effect.fn("refreshSnapshot")(function* (options?: {
+    readonly deferWhenDemandEnds?: boolean;
+  }) {
     const nextSettings = yield* input.getSettings;
-    return yield* applySnapshot(nextSettings, { forceRefresh: true });
-  });
-
-  const hasProviderStatusDemand = Effect.gen(function* () {
-    const state = yield* Ref.get(snapshotStateRef);
-    const instanceId = state.snapshot.instanceId;
-    const [genericDemand, instanceDemand] = yield* Effect.all([
-      backgroundPolicy.shouldRunScopeWork({ type: "provider-status" }),
-      backgroundPolicy.shouldRunScopeWork({ type: "provider-status", instanceId }),
-    ]);
-    return genericDemand || instanceDemand;
+    return yield* applySnapshot(nextSettings, { ...options, forceRefresh: true });
   });
 
   const getRefreshInterval =
@@ -249,6 +265,15 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     Effect.asVoid(applySnapshot(nextSettings)),
   ).pipe(Effect.forkScoped);
 
+  yield* Stream.runForEach(backgroundPolicy.streamChanges, () =>
+    Effect.gen(function* () {
+      if (!(yield* Ref.get(deferredDemandRefreshRef)) || !(yield* hasProviderStatusDemand)) {
+        return;
+      }
+      yield* refreshSnapshot();
+    }),
+  ).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
+
   yield* Effect.forever(
     getRefreshInterval.pipe(
       Effect.flatMap((refreshInterval) =>
@@ -266,7 +291,9 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
             Duration.toMillis(Duration.fromInputUnsafe(refreshInterval)) > 0
               ? hasProviderStatusDemand.pipe(
                   Effect.flatMap((shouldRefresh) =>
-                    shouldRefresh ? refreshSnapshot().pipe(Effect.asVoid) : Effect.void,
+                    shouldRefresh
+                      ? refreshSnapshot({ deferWhenDemandEnds: true }).pipe(Effect.asVoid)
+                      : Effect.void,
                   ),
                 )
               : Effect.void,
