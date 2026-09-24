@@ -47,7 +47,7 @@ describe("055_RepairVoiceBudUpstreamMigrationCollisions", () => {
       `;
       assert.ok(!messagesBefore.some((column) => column.name === "context_json"));
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 55 });
       assert.deepStrictEqual(executed, [[55, "RepairVoiceBudUpstreamMigrationCollisions"]]);
       const tablesAfter = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master
@@ -61,8 +61,8 @@ describe("055_RepairVoiceBudUpstreamMigrationCollisions", () => {
         messagesAfter.filter((column) => column.name === "context_json").length,
         1,
       );
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 55 }), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("is idempotent on a fresh upstream schema", () =>
@@ -70,11 +70,11 @@ describe("055_RepairVoiceBudUpstreamMigrationCollisions", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 54 });
       const before = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 55 });
       yield* repair;
       const after = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
       assert.deepStrictEqual(after, before);
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 55 }), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

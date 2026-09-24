@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("053_BackfillProjectionThreadLatestTurn", (it) => {
   it.effect("restores missing latest turns without replacing existing references", () =>
@@ -179,7 +179,7 @@ layer("053_BackfillProjectionThreadLatestTurn", (it) => {
           )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 56 });
 
       const threads = yield* sql<{
         readonly threadId: string;

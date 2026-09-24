@@ -50,7 +50,7 @@ describe("054_RepairVoiceBudMigrationCollisions", () => {
         `;
         assert.deepStrictEqual(history, [{ name: "BackfillProjectionThreadLatestTurn" }]);
         assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 54 }), []);
-      }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
     );
   }
 
@@ -64,6 +64,6 @@ describe("054_RepairVoiceBudMigrationCollisions", () => {
       const after = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
       assert.deepStrictEqual(after, before);
       assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 54 }), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
