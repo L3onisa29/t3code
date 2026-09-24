@@ -5,6 +5,7 @@ import {
   type VoiceBudRecordingStartedEvent,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
@@ -15,9 +16,14 @@ describe("VoiceBudBridge registry operations", () => {
   it.effect("preserves the registry receiver when binding through the bridge service", () =>
     Effect.gen(function* () {
       const started: VoiceBudRecordingStartedEvent[] = [];
+      const recordingStarted = yield* Deferred.make<void>();
       const registry = new VoiceBudSessionRegistry({
-        bindingTimeoutMs: 50,
-        onRecordingStarted: (event) => Effect.sync(() => started.push(event)).pipe(Effect.asVoid),
+        now: () => 0,
+        onRecordingStarted: (event) =>
+          Effect.sync(() => started.push(event)).pipe(
+            Effect.andThen(Deferred.succeed(recordingStarted, undefined)),
+            Effect.asVoid,
+          ),
         onTranscription: () => Effect.void,
       });
       const operations = makeVoiceBudRegistryOperations(registry);
@@ -25,7 +31,7 @@ describe("VoiceBudBridge registry operations", () => {
       const recordingId = VoiceBudRecordingId.make("recording");
 
       const beginFiber = yield* registry.begin(requestId, recordingId).pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(recordingStarted);
 
       assert.lengthOf(started, 1);
       assert.isTrue(

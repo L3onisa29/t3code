@@ -30,7 +30,7 @@ const decodeExternalResponse = Schema.decodeUnknownSync(
 const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const frame = (value: unknown) => `${encodeUnknownJson(value)}\n`;
 
-class VoiceBudTestTransportError extends Schema.TaggedErrorClass<VoiceBudTestTransportError>()(
+class VoiceBudTestTransportError extends Schema.TaggedError<VoiceBudTestTransportError>()(
   "VoiceBudTestTransportError",
   {
     cause: Schema.Defect(),

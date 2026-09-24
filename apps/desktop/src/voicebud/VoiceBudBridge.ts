@@ -20,7 +20,7 @@ import {
 import { VoiceBudBridgeServer } from "./VoiceBudBridgeServer.ts";
 import { VoiceBudSessionRegistry } from "./VoiceBudSessionRegistry.ts";
 
-export class VoiceBudBridgeStartError extends Schema.TaggedErrorClass<VoiceBudBridgeStartError>()(
+export class VoiceBudBridgeStartError extends Schema.TaggedError<VoiceBudBridgeStartError>()(
   "VoiceBudBridgeStartError",
   {
     cause: Schema.Defect(),

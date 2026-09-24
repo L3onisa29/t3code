@@ -96,7 +96,7 @@ function secretMatches(actual: string, supplied: string): boolean {
 
 const textEncoder = new TextEncoder();
 
-export class VoiceBudBridgeServerOperationError extends Schema.TaggedErrorClass<VoiceBudBridgeServerOperationError>()(
+export class VoiceBudBridgeServerOperationError extends Schema.TaggedError<VoiceBudBridgeServerOperationError>()(
   "VoiceBudBridgeServerOperationError",
   {
     operation: Schema.Literals(["validate-directory", "listen"]),

@@ -773,14 +773,20 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
       >
         <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
-            <SquarePenIcon aria-hidden className={draftPenClassName} />
             {props.project ? (
               <ProjectFavicon project={props.project} className="size-4 shrink-0" />
             ) : null}
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
               {props.projectDisplayName}
             </span>
-            <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
+            <span className="group/sidebar-draft-action relative ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
+              <SquarePenIcon
+                aria-hidden
+                className={cn(
+                  draftPenClassName,
+                  "transition-opacity group-has-[:focus-visible]/sidebar-draft-action:opacity-0 group-hover/sidebar-row:opacity-0",
+                )}
+              />
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -788,7 +794,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
                       type="button"
                       aria-label="Discard draft"
                       onClick={handleDiscard}
-                      className="pointer-events-none inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
+                      className="pointer-events-none absolute right-0 inline-flex cursor-pointer items-center rounded-md bg-transparent px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100"
                     >
                       <XIcon className="size-3" />
                     </button>

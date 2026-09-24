@@ -1,6 +1,7 @@
 import { legacyThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import ensureLinkedPullRequestColumn from "./042_ProjectionThreadLinkedPullRequest.ts";
 
 interface LegacyLinkedThreadRow {
   readonly threadId: string;
@@ -29,6 +30,9 @@ function parseLegacyLinkedPullRequest(json: string): LegacyLinkedPullRequest | n
 }
 
 export default Effect.gen(function* () {
+  // VoiceBud preview builds used migration ID 42 for a different change.
+  // Restore this idempotent prerequisite before reading the legacy column.
+  yield* ensureLinkedPullRequestColumn;
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
