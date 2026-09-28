@@ -68,6 +68,7 @@ import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0054 from "./Migrations/054_RepairVoiceBudMigrationCollisions.ts";
 import Migration0055 from "./Migrations/055_RepairVoiceBudUpstreamMigrationCollisions.ts";
 import Migration0056 from "./Migrations/056_RepairVoiceBudFilesViewedCollision.ts";
+import Migration0057 from "./Migrations/057_ProjectionThreadsAutoSettleDisabledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -136,6 +137,8 @@ const migrationEntries = [
   [54, "RepairVoiceBudMigrationCollisions", Migration0054],
   [55, "RepairVoiceBudUpstreamMigrationCollisions", Migration0055],
   [56, "RepairVoiceBudFilesViewedCollision", Migration0056],
+  // Upstream used 54; shipped VoiceBud databases already own IDs 54–56.
+  [57, "ProjectionThreadsAutoSettleDisabledAt", Migration0057],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -71,7 +71,10 @@ describe("056_RepairVoiceBudFilesViewedCollision", () => {
           source === "upstream-53" ? yield* sql`SELECT * FROM pull_request_files_viewed` : [];
 
         const executed = yield* runMigrations();
-        assert.deepStrictEqual(executed.at(-1), [56, "RepairVoiceBudFilesViewedCollision"]);
+        assert.deepStrictEqual(
+          executed.find(([id]) => id === 56),
+          [56, "RepairVoiceBudFilesViewedCollision"],
+        );
         assert.deepStrictEqual(
           yield* sql`SELECT thread_id, latest_turn_id FROM projection_threads ORDER BY thread_id`,
           [
