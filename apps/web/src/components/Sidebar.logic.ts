@@ -12,6 +12,7 @@ import type { AsyncResult } from "effect/unstable/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
+  threadWokeAt,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -890,6 +891,73 @@ function firstValidTimestamp(
 }
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
+
+export function isSidebarThreadWoke(input: {
+  readonly wokeAt: string | null;
+  readonly lastVisitedAt: string | undefined;
+  readonly settledOverride: SidebarThreadSummary["settledOverride"];
+}): boolean {
+  const wokeAt = toSortableTimestamp(input.wokeAt ?? undefined);
+  const visitedAt = toSortableTimestamp(input.lastVisitedAt);
+  return (
+    input.settledOverride !== "settled" &&
+    wokeAt !== null &&
+    (visitedAt === null || visitedAt < wokeAt)
+  );
+}
+
+/** Group an already arranged active list by status. Finished threads use
+    completion time; other groups preserve their arranged positions. */
+export function orderSidebarThreadsByStatus<
+  T extends SidebarThreadStatusInput &
+    ThreadSnoozeShell &
+    Pick<SidebarThreadSummary, "settledOverride" | "createdAt" | "updatedAt">,
+>(
+  threads: readonly T[],
+  options: {
+    readonly now: string;
+    readonly lastVisitedAt: (thread: T) => string | undefined;
+    readonly hasUnsentText: (thread: T) => boolean;
+  },
+): T[] {
+  const writing: T[] = [];
+  const waiting: T[] = [];
+  const working: T[] = [];
+  const ended: T[] = [];
+  const woke: T[] = [];
+  for (const thread of threads) {
+    if (options.hasUnsentText(thread)) {
+      writing.push(thread);
+      continue;
+    }
+    const status = resolveSidebarThreadStatus(thread);
+    if (status === "approval" || status === "input") waiting.push(thread);
+    else if (status === "working" || status === "monitoring") working.push(thread);
+    else if (
+      status === "ready" &&
+      isSidebarThreadWoke({
+        wokeAt: threadWokeAt(thread, options),
+        lastVisitedAt: options.lastVisitedAt(thread),
+        settledOverride: thread.settledOverride,
+      })
+    )
+      woke.push(thread);
+    else ended.push(thread);
+  }
+  const newestEnded = ended
+    .map((thread) => ({
+      thread,
+      timestamp: firstValidTimestampMs(
+        thread.latestTurn?.completedAt,
+        thread.session?.updatedAt,
+        thread.updatedAt,
+        thread.createdAt,
+      ),
+    }))
+    .sort((left, right) => right.timestamp - left.timestamp)
+    .map(({ thread }) => thread);
+  return [...writing, ...waiting, ...working, ...newestEnded, ...woke];
+}
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.

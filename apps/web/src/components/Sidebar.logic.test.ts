@@ -22,6 +22,8 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  orderSidebarThreadsByStatus,
+  isSidebarThreadWoke,
   resolveProjectStatusIndicator,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
@@ -979,6 +981,157 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
+  });
+});
+
+describe("orderSidebarThreadsByStatus", () => {
+  const now = "2026-03-09T12:00:00.000Z";
+  const base = {
+    createdAt: now,
+    updatedAt: now,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    session: null,
+    latestTurn: null,
+    snoozedAt: null,
+    snoozedUntil: null,
+    settledOverride: null,
+  };
+  const session = {
+    threadId: ThreadId.make("thread-1"),
+    status: "running" as const,
+    providerName: "Codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: now,
+  };
+  const options = { now, lastVisitedAt: () => undefined, hasUnsentText: () => false };
+  const woke = { ...base, id: "woke", snoozedUntil: "2026-03-09T11:00:00.000Z" };
+
+  it("orders finished threads by completion time instead of creation or manual position", () => {
+    const older = {
+      ...base,
+      id: "older",
+      activeOrderKey: "b",
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T09:00:00.000Z" }),
+    };
+    const newer = {
+      ...base,
+      id: "newer",
+      activeOrderKey: "z",
+      createdAt: "2026-03-01T09:00:00.000Z",
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:00:00.000Z" }),
+    };
+    const waiting = { ...base, id: "waiting", hasPendingUserInput: true };
+    expect(orderSidebarThreadsByStatus([older, woke, newer, waiting], options)).toEqual([
+      waiting,
+      newer,
+      older,
+      woke,
+    ]);
+    expect(
+      orderSidebarThreadsByStatus([older, newer], {
+        ...options,
+        hasUnsentText: () => true,
+      }),
+    ).toEqual([older, newer]);
+  });
+
+  it("falls back through session, update and creation dates and preserves equal-date order", () => {
+    const created = {
+      ...base,
+      id: "created",
+      createdAt: "2026-03-09T08:00:00.000Z",
+      updatedAt: "invalid",
+    };
+    const updated = { ...base, id: "updated", updatedAt: "2026-03-09T09:00:00.000Z" };
+    const failed = {
+      ...base,
+      id: "failed",
+      latestTurn: makeLatestTurn({ completedAt: "invalid" }),
+      session: { ...session, status: "error" as const, updatedAt: "2026-03-09T10:00:00.000Z" },
+    };
+    const tied = { ...updated, id: "tied" };
+    expect(orderSidebarThreadsByStatus([created, updated, failed, tied], options)).toEqual([
+      failed,
+      updated,
+      tied,
+      created,
+    ]);
+  });
+
+  it("prioritizes waiting, working, ended and woke while keeping each group's arrangement", () => {
+    const threads = [
+      woke,
+      { ...base, id: "done" },
+      { ...base, id: "working", session },
+      { ...base, id: "input", session, hasPendingUserInput: true },
+      { ...base, id: "monitoring", backgroundLiveness: "monitoring" as const },
+      { ...base, id: "approval", session, hasPendingApprovals: true },
+      { ...base, id: "failed", session: { ...session, status: "error" as const } },
+    ];
+    expect(orderSidebarThreadsByStatus(threads, options).map((thread) => thread.id)).toEqual([
+      "input",
+      "approval",
+      "working",
+      "monitoring",
+      "done",
+      "failed",
+      "woke",
+    ]);
+    expect(threads[0]).toBe(woke);
+  });
+
+  it("reclassifies threads when work starts, completes, or the wake is acknowledged", () => {
+    const done = { ...base, id: "done" };
+    const running = { ...base, id: "running", session };
+    expect(orderSidebarThreadsByStatus([done, running], options)).toEqual([running, done]);
+    const completed = { ...running, session: { ...session, status: "ready" as const } };
+    expect(orderSidebarThreadsByStatus([done, completed], options)).toEqual([done, completed]);
+    expect(orderSidebarThreadsByStatus([woke, done], options)).toEqual([done, woke]);
+    expect(
+      orderSidebarThreadsByStatus([woke, done], { ...options, lastVisitedAt: () => now }),
+    ).toEqual([woke, done]);
+    const workingWake = { ...woke, backgroundLiveness: "working" as const };
+    expect(orderSidebarThreadsByStatus([done, workingWake], options)).toEqual([workingWake, done]);
+  });
+
+  it("puts unsent composer text first and restores status order after sending or clearing it", () => {
+    const threads = [
+      { ...base, id: "input", hasPendingUserInput: true },
+      { ...base, id: "working", session },
+      { ...base, id: "draft" },
+      woke,
+    ];
+    expect(
+      orderSidebarThreadsByStatus(threads, {
+        ...options,
+        hasUnsentText: (thread) => thread.id === "draft" || thread.id === "woke",
+      }).map((thread) => thread.id),
+    ).toEqual(["draft", "woke", "input", "working"]);
+    expect(orderSidebarThreadsByStatus(threads, options).map((thread) => thread.id)).toEqual([
+      "input",
+      "working",
+      "draft",
+      "woke",
+    ]);
+  });
+
+  it("uses the same wake visibility as the row, including malformed visits and settlement", () => {
+    expect(
+      isSidebarThreadWoke({ wokeAt: now, lastVisitedAt: "invalid", settledOverride: null }),
+    ).toBe(true);
+    expect(
+      isSidebarThreadWoke({ wokeAt: "invalid", lastVisitedAt: undefined, settledOverride: null }),
+    ).toBe(false);
+    expect(isSidebarThreadWoke({ wokeAt: now, lastVisitedAt: now, settledOverride: null })).toBe(
+      false,
+    );
+    expect(
+      isSidebarThreadWoke({ wokeAt: now, lastVisitedAt: undefined, settledOverride: "settled" }),
+    ).toBe(false);
   });
 });
 
