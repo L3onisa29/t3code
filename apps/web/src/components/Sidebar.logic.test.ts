@@ -429,6 +429,22 @@ describe("shouldRecedeSidebarThread", () => {
     expect(shouldRecedeSidebarThread({ ...input, isSelected: true })).toBe(false);
   });
 
+  it.each(["working", "monitoring", "ready", "approval"] as const)(
+    "keeps unsent content prominent even while %s",
+    (status) => {
+      expect(
+        shouldRecedeSidebarThread({
+          status,
+          isUnread: false,
+          isWoke: false,
+          isActive: false,
+          isSelected: false,
+          hasUnsentDraft: true,
+        }),
+      ).toBe(false);
+    },
+  );
+
   it.each([false, true])("keeps input-required threads prominent with unread=%s", (isUnread) => {
     expect(
       shouldRecedeSidebarThread({
@@ -1076,22 +1092,22 @@ describe("orderSidebarThreadsByStatus", () => {
       updatedAt: "invalid",
     };
     const updated = { ...base, id: "updated", updatedAt: "2026-03-09T09:00:00.000Z" };
-    const failed = {
+    const sessionDate = {
       ...base,
-      id: "failed",
+      id: "sessionDate",
       latestTurn: makeLatestTurn({ completedAt: "invalid" }),
-      session: { ...session, status: "error" as const, updatedAt: "2026-03-09T10:00:00.000Z" },
+      session: { ...session, status: "ready" as const, updatedAt: "2026-03-09T10:00:00.000Z" },
     };
     const tied = { ...updated, id: "tied" };
-    expect(orderSidebarThreadsByStatus([created, updated, failed, tied], options)).toEqual([
-      failed,
+    expect(orderSidebarThreadsByStatus([created, updated, sessionDate, tied], options)).toEqual([
+      sessionDate,
       updated,
       tied,
       created,
     ]);
   });
 
-  it("prioritizes waiting, working, ended and woke while keeping each group's arrangement", () => {
+  it("prioritizes waiting, working, failed, ended and woke while keeping each group's arrangement", () => {
     const threads = [
       woke,
       { ...base, id: "done" },
@@ -1106,8 +1122,8 @@ describe("orderSidebarThreadsByStatus", () => {
       "approval",
       "working",
       "monitoring",
-      "done",
       "failed",
+      "done",
       "woke",
     ]);
     expect(threads[0]).toBe(woke);
@@ -1821,7 +1837,7 @@ describe("applySidebarThreadDrop", () => {
       snoozedUntil: null,
       updatedAt: serverNow,
     };
-    expect(preview).toEqual({ ...final, updatedAt: source.updatedAt });
+    expect(preview).toEqual({ ...final, updatedAt: now });
     expect(sortThreadsForSidebar([newer, preview]).map((row) => row.id)).toEqual([
       "newer",
       "dragged",
@@ -1849,6 +1865,7 @@ describe("applySidebarThreadDrop", () => {
       settledOverride: "active",
       settledAt: null,
       unsettledAt: now,
+      updatedAt: now,
     });
   });
 
@@ -1872,7 +1889,7 @@ describe("applySidebarThreadDrop", () => {
       unsettledAt: null,
     };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
-    expect(preview).toEqual({ ...final, settledAt: now });
+    expect(preview).toEqual({ ...final, settledAt: now, updatedAt: now });
     expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "dragged",
       "newer",
@@ -1892,7 +1909,7 @@ describe("applySidebarThreadDrop", () => {
     const preview = applySidebarThreadDrop(source, "settled", now);
     const final = { ...source, snoozedAt: null, snoozedUntil: null };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
-    expect(preview).toEqual(final);
+    expect(preview).toEqual({ ...final, updatedAt: now });
     expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "newer",
       "dragged",
@@ -1917,6 +1934,7 @@ describe("applySidebarThreadDrop", () => {
       settledOverride: "active",
       settledAt: null,
       unsettledAt: now,
+      updatedAt: now,
     });
     expect(
       sortPinnedThreadsForSidebar([
@@ -1938,7 +1956,12 @@ describe("applySidebarThreadDrop", () => {
       unsettledAt: earlier,
     });
     const unchangedSlot = applySidebarThreadDrop(source, "pinned", now);
-    expect(unchangedSlot).toEqual({ ...source, snoozedAt: null, snoozedUntil: null });
+    expect(unchangedSlot).toEqual({
+      ...source,
+      snoozedAt: null,
+      snoozedUntil: null,
+      updatedAt: now,
+    });
     expect(applySidebarThreadDrop(source, "pinned", now, "m")).toEqual({
       ...unchangedSlot,
       pinOrderKey: "m",

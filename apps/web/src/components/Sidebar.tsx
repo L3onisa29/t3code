@@ -159,6 +159,10 @@ import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
+  constrainSidebarDropTarget,
+  isSidebarDragSourceValid,
+  projectSidebarActiveDropOrder,
+  sidebarActiveGroup,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
   deleteSelectedThreadEntries,
@@ -211,7 +215,6 @@ import {
   prStatusIndicator,
   resolveThreadPullRequestBadge,
   terminalStatusFromRunningIds,
-  synchronizeTerminalPulse,
   type TerminalStatusIndicator,
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
@@ -1077,9 +1080,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
+  const hasUnsentContent = useThreadHasUnsentDraft(threadRef);
   // Unsent composer text on this thread. The open thread shows its own
   // composer, so the marker only decorates rows you have navigated away from.
-  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isActive;
+  const hasUnsentDraft = hasUnsentContent && !props.isActive;
   const clearComposerContent = useComposerDraftStore((store) => store.clearComposerContent);
   const handleDiscardDraftClick = useCallback(
     (event: ReactMouseEvent) => {
@@ -1131,7 +1135,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     lastVisitedAt,
     settledOverride: thread.settledOverride,
   });
-  // Background work always recedes when it is not selected: an unread parent
+  // Background work recedes unless selected or holding unsent content: an unread parent
   // completion must not pull a still-working thread back into the foreground.
   // Ready and action-required rows keep their unread and wake prominence.
   const shouldRecede = shouldRecedeSidebarThread({
@@ -1140,6 +1144,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     isWoke,
     isActive: props.isActive,
     isSelected,
+    hasUnsentDraft: hasUnsentContent,
   });
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
@@ -1412,12 +1417,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-    variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
+    variantAction === "unsettle" &&
+      !hasUnsentContent &&
+      "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
         ? "bg-sidebar-row-selected text-sidebar-foreground"
-        : hasUnsentDraft
+        : hasUnsentContent
           ? cn(draftSurfaceClassName, "text-sidebar-foreground")
           : shouldRecede
             ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
@@ -1507,7 +1514,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               "truncate group-focus-within/sidebar-row:text-foreground group-hover/sidebar-row:text-foreground",
               shouldRecede
                 ? "text-secondary-label/70"
-                : props.isActive || isWoke || status === "input"
+                : hasUnsentContent || props.isActive || isWoke || status === "input"
                   ? "text-foreground"
                   : isUnread
                     ? "text-muted-foreground"
@@ -1549,10 +1556,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       data-testid={`sidebar-terminal-status-${thread.id}`}
       className={cn("inline-flex shrink-0 items-center justify-center", terminalStatus.colorClass)}
     >
-      <TerminalIcon
-        className={cn("size-3.5", terminalStatus.pulse && "motion-safe:animate-status-pulse")}
-        onAnimationStart={synchronizeTerminalPulse}
-      />
+      <TerminalIcon className="size-3.5" />
     </span>
   ) : null;
   // Same pen the new-thread draft rows lead with, so both kinds of unsent
@@ -1639,7 +1643,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span
               className={cn(
                 "shrink-0 transition-opacity",
-                (!props.isActive || variantAction === "unsettle") &&
+                !hasUnsentContent &&
+                  (!props.isActive || variantAction === "unsettle") &&
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
@@ -3229,11 +3234,9 @@ export default function Sidebar() {
   const [dragState, setDragState] = useState<{
     readonly activeKey: string;
     readonly activeSection: SidebarSection;
-    readonly occurredAt: string;
     readonly activationY: number | null;
     readonly targetSection: SidebarSection | null;
   } | null>(null);
-  const dragTargetSection = dragState?.targetSection ?? null;
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const finishThreadDrag = useCallback((started: boolean) => {
     dragSensorRef.current = null;
@@ -3413,7 +3416,6 @@ export default function Sidebar() {
         activeKey,
         activeSection,
         targetSection: activeSection,
-        occurredAt: new Date().toISOString(),
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
@@ -3464,14 +3466,15 @@ export default function Sidebar() {
     snoozedThreads.length,
     visibleSnoozedThreads,
   ]);
+  const dragSourceValid =
+    dragState !== null && isSidebarDragSourceValid(sidebarListItems, dragState);
+  const validDragState = dragSourceValid ? dragState : null;
+  const dragTargetSection = validDragState?.targetSection ?? null;
   useEffect(() => {
-    if (
-      dragState !== null &&
-      !sidebarListItems.some((item) => item.kind === "thread" && item.key === dragState.activeKey)
-    ) {
+    if (dragState !== null && !dragSourceValid) {
       cancelThreadDrag();
     }
-  }, [cancelThreadDrag, dragState, sidebarListItems]);
+  }, [cancelThreadDrag, dragState, dragSourceValid]);
   const listMotionPaused = dragState !== null;
   // Every shell event rebuilds sidebarListItems, but rows only move when the
   // rendered order or a row's section changes. Keying the motion pass on that
@@ -3499,10 +3502,64 @@ export default function Sidebar() {
     sidebarListOrderKey,
     visibleDraftSessionCount,
   ]);
+  const draggedThreadKey = validDragState?.activeKey;
+  const draggedFromSection = validDragState?.activeSection;
+  const dragActivationY = validDragState?.activationY;
+  const projectActiveDropContext = useCallback(
+    (occurredAt: string) => {
+      const key = (thread: EnvironmentThreadShell) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const options = {
+        now: occurredAt,
+        hasUnsentText: (thread: EnvironmentThreadShell) => writingThreads.has(key(thread)),
+        lastVisitedAt: (thread: EnvironmentThreadShell) => threadLastVisitedAtById[key(thread)],
+      };
+      const source = draggedThreadKey === undefined ? undefined : threadByKey.get(draggedThreadKey);
+      return {
+        occurredAt,
+        groups: new Map(
+          source === undefined
+            ? []
+            : activeThreads.map((thread) => [key(thread), sidebarActiveGroup(thread, options)]),
+        ),
+        enteringActiveOrder:
+          source === undefined
+            ? []
+            : projectSidebarActiveDropOrder(source, activeThreads, key, options),
+      };
+    },
+    [activeThreads, draggedThreadKey, threadByKey, threadLastVisitedAtById, writingThreads],
+  );
+  // Refresh when thread state changes, without a timer during a stationary drag.
+  const activeDropContext = useMemo(
+    () => projectActiveDropContext(new Date().toISOString()),
+    [projectActiveDropContext],
+  );
+  const resolveThreadDropTarget = useCallback(
+    (activeKey: string, overId: string, occurredAt?: string) => {
+      const activeSection = sectionByThreadKey.get(activeKey);
+      if (activeSection === undefined || activeKey !== draggedThreadKey) return null;
+      return constrainSidebarDropTarget({
+        target: resolveSidebarDropTarget(sidebarListItems, activeKey, overId),
+        activeKey,
+        activeSection,
+        activeOrder: activeKeys,
+        ...(occurredAt === undefined ? activeDropContext : projectActiveDropContext(occurredAt)),
+      });
+    },
+    [
+      activeDropContext,
+      activeKeys,
+      draggedThreadKey,
+      projectActiveDropContext,
+      sectionByThreadKey,
+      sidebarListItems,
+    ],
+  );
   const handleThreadDragOver = useCallback(
     (event: DragOverEvent) => {
       const target = event.over
-        ? resolveSidebarDropTarget(sidebarListItems, String(event.active.id), String(event.over.id))
+        ? resolveThreadDropTarget(String(event.active.id), String(event.over.id))
         : null;
       setDragState((current) =>
         current === null || current.activeKey !== String(event.active.id)
@@ -3510,24 +3567,25 @@ export default function Sidebar() {
           : { ...current, targetSection: target?.section ?? null },
       );
     },
-    [sidebarListItems],
+    [resolveThreadDropTarget],
   );
   const sortableIds = useMemo(() => sidebarListItems.map(sidebarListItemId), [sidebarListItems]);
   const draggedSettledOrder = useMemo(() => {
-    const thread = dragState === null ? undefined : threadByKey.get(dragState.activeKey);
-    if (dragState === null || thread === undefined) return [];
+    const thread = draggedThreadKey === undefined ? undefined : threadByKey.get(draggedThreadKey);
+    if (thread === undefined) return [];
     const key = (candidate: EnvironmentThreadShell) =>
       scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id));
     return sortSettledThreads([
-      ...settledThreads.filter((candidate) => key(candidate) !== dragState.activeKey),
-      applySidebarThreadDrop(thread, "settled", dragState.occurredAt),
+      ...settledThreads.filter((candidate) => key(candidate) !== draggedThreadKey),
+      applySidebarThreadDrop(thread, "settled", activeDropContext.occurredAt),
     ]).map(key);
-  }, [dragState, settledThreads, threadByKey]);
+  }, [activeDropContext.occurredAt, draggedThreadKey, settledThreads, threadByKey]);
   const sidebarSortingStrategy = useMemo(
     () =>
       createSidebarSortingStrategy({
         items: sidebarListItems,
         boundaryLabelHeight: SIDEBAR_DRAG_LABEL_HEIGHT,
+        resolveTarget: resolveThreadDropTarget,
         settledOrder: draggedSettledOrder,
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
@@ -3536,6 +3594,7 @@ export default function Sidebar() {
       }),
     [
       draggedSettledOrder,
+      resolveThreadDropTarget,
       routeThreadKey,
       settledShelfExpanded,
       settledVisibleCount,
@@ -3562,17 +3621,14 @@ export default function Sidebar() {
     }),
     [threads],
   );
-  const draggedThreadKey = dragState?.activeKey;
-  const draggedFromSection = dragState?.activeSection;
-  const dragActivationY = dragState?.activationY;
   const dndCollisionDetection = useMemo(() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
-      return createSidebarCollisionDetection(() => true);
+      return createSidebarCollisionDetection(() => false);
     const source = threadByKey.get(draggedThreadKey);
     if (source === undefined) return createSidebarCollisionDetection(() => false);
     return createSidebarCollisionDetection(
       (id) => {
-        const target = resolveSidebarDropTarget(sidebarListItems, draggedThreadKey, id);
+        const target = resolveThreadDropTarget(draggedThreadKey, id);
         if (target === null) return false;
         return (
           planSidebarThreadDrop({
@@ -3607,6 +3663,7 @@ export default function Sidebar() {
     draggedThreadKey,
     draggedFromSection,
     dragActivationY,
+    resolveThreadDropTarget,
     draggableThreadKeys,
     pinnedKeys,
     sidebarListItems,
@@ -3616,10 +3673,11 @@ export default function Sidebar() {
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
       const activeSection = sectionByThreadKey.get(activeKey);
+      const occurredAt = new Date().toISOString();
       const target =
         event.over === null
           ? null
-          : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
+          : resolveThreadDropTarget(activeKey, String(event.over.id), occurredAt);
       const activeThread = threadByKey.get(activeKey);
       if (activeSection === undefined || target === null || activeThread === undefined) return;
       const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
@@ -3654,7 +3712,7 @@ export default function Sidebar() {
         key: activeKey,
         sourceSection: activeSection,
         section: target.section,
-        occurredAt: new Date().toISOString(),
+        occurredAt,
         clearsSnooze:
           plan.kind === "pin" ||
           plan.kind === "settle" ||
@@ -3764,9 +3822,9 @@ export default function Sidebar() {
       planForwardNavigation,
       reorderPinnedThread,
       reorderActiveThread,
+      resolveThreadDropTarget,
       sectionByThreadKey,
       settleThread,
-      sidebarListItems,
       threadByKey,
       unpinThread,
       unsettleThread,
@@ -4783,12 +4841,16 @@ export default function Sidebar() {
                             isPinned={thread.pinnedAt != null}
                             sortable={sortable}
                             dropVerb={
-                              dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
+                              validDragState?.activeKey === threadKey
+                                ? resolveSidebarDropVerb(
+                                    validDragState.activeSection,
+                                    dragTargetSection,
+                                  )
                                 : null
                             }
                             dragOverPinned={
-                              dragState?.activeKey === threadKey && dragTargetSection === "pinned"
+                              validDragState?.activeKey === threadKey &&
+                              dragTargetSection === "pinned"
                             }
                             snoozeWakeLabelText={
                               section === "snoozed" && thread.snoozedUntil != null
@@ -4868,7 +4930,7 @@ export default function Sidebar() {
                           </SortableThreadRow>
                         );
                       };
-                      const from = dragState?.activeSection ?? null;
+                      const from = validDragState?.activeSection ?? null;
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
                           key="draft-sessions"

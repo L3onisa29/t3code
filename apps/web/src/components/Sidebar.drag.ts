@@ -4,6 +4,7 @@ import {
   resolveSidebarDropTarget,
   sidebarListItemId,
   sidebarMarkerId,
+  type SidebarDropTarget,
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
@@ -96,6 +97,7 @@ export function createSidebarCollisionDetection(
  * A zero scaleY marks rows/markers to hide while retaining their measured nodes. */
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
+  resolveTarget?: (activeKey: string, overId: string) => SidebarDropTarget | null;
   settledOrder: readonly string[];
   settledExpanded: boolean;
   settledVisibleCount?: number;
@@ -116,7 +118,9 @@ export function createSidebarSortingStrategy(input: {
     const active = items[activeIndex];
     const over = items[overIndex] ?? active;
     if (active?.kind !== "thread" || !over || !rects[0]) return [];
-    const target = resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
+    const target = input.resolveTarget
+      ? input.resolveTarget(active.key, sidebarListItemId(over))
+      : resolveSidebarDropTarget(items, active.key, sidebarListItemId(over));
     if (!target) return [];
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],

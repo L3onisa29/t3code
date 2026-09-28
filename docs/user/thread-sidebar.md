@@ -63,8 +63,9 @@ identify empty sections and a collapsed settled shelf.
 
 Drag within the pinned or active section to change its order. Other rows slide aside to show the
 spot where the thread will land. Pinned threads keep the position you choose; active threads on
-web and desktop keep that position within their status group, except finished threads, which
-follow completion time. On
+web and desktop can only be reordered within their current status group. Finished threads
+always follow completion time. Moving a thread from another section into Active places it
+according to its resulting status and saved position or completion time. On
 mobile, open a thread's menu and choose **Arrange threads**. Drag a handle within or between
 **Pinned** and **Active** to reorder, pin, or unpin. Drop onto the **Settled** divider to
 settle a thread. The dragged card shows the action before you release it. Expand **Snoozed**
@@ -78,13 +79,13 @@ preference. While dragging, rows follow the insertion gap without replaying a se
 after the drop.
 
 New threads appear above the active threads you have arranged. Settling clears a thread's active
-position, so using **Un-settle** returns it to the top. Pinning and snoozing preserve its active
+position, so using **Un-settle** returns it among newly created threads in its status group.
+Finished threads still follow completion time. Pinning and snoozing preserve its active
 position until you move it again. On web and desktop, the active list puts threads with unsent
 composer text first, followed by threads awaiting input or approval, working or monitoring threads,
-finished threads, and threads marked
-**Woke**. Finished threads appear by completion time, newest first. Saved positions and creation
-order apply within the other groups. Mobile keeps the saved active
-order regardless of activity. The settled shelf continues to use settlement time.
+failed threads, finished threads, and threads marked **Woke**. Finished threads appear by completion
+time, newest first. Saved positions and creation order apply within the other groups. Mobile keeps
+the saved active order regardless of activity. The settled shelf continues to use settlement time.
 
 If dragging is unavailable for one environment, update the T3 Code server running in that
 environment. Pinned and active reordering require server support. Threads from older servers keep

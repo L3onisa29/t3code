@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import { DEFAULT_RUNTIME_MODE } from "../types";
 import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
@@ -8,6 +10,16 @@ import {
 } from "./Sidebar.drag";
 import {
   resolveSidebarDropTarget,
+  resolveSidebarDropVerb,
+  isSidebarDragSourceValid,
+  projectSidebarActiveDropOrder,
+  constrainSidebarDropTarget,
+  planSidebarThreadDrop,
+  applySidebarThreadDrop,
+  orderSidebarThreadsByStatus,
+  sidebarActiveGroup,
+  sortThreadsForSidebar,
+  type SidebarActiveGroup,
   sidebarListItemId,
   sidebarMarkerId,
   type SidebarListItem,
@@ -834,4 +846,381 @@ describe("lifted card clearance", () => {
     expect(511 + apply(511, 36, -500, 96).y).toBe(128);
     expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
   });
+});
+
+describe("status-constrained sidebar drops", () => {
+  const activeOrder = ["input", "work1", "work2", "failed", "done1", "done2"];
+  const groups = new Map<string, SidebarActiveGroup>([
+    ["input", "waiting"],
+    ["work1", "working"],
+    ["work2", "working"],
+    ["failed", "failed"],
+    ["done1", "ended"],
+    ["done2", "ended"],
+  ]);
+  const items = [
+    pinnedHeader,
+    divider,
+    ...activeOrder.map((key) => thread(key, "active")),
+    settledHeader,
+  ];
+  const resolve = (activeKey: string, overId: string) =>
+    constrainSidebarDropTarget({
+      target: resolveSidebarDropTarget(items, activeKey, overId),
+      activeKey,
+      activeSection: "active",
+      activeOrder,
+      groups,
+      enteringActiveOrder: [],
+    });
+  const plan = (
+    activeKey: string,
+    target: NonNullable<ReturnType<typeof resolve>>,
+    activeSection: SidebarSection = "active",
+  ) =>
+    planSidebarThreadDrop({
+      activeKey,
+      activeSection,
+      target,
+      pinnedOrder: [],
+      pinnedKeysById: new Map(),
+      activeOrder,
+      activeKeysById: new Map([["hidden", "V"]]),
+      activeReorderableKeys: new Set(["work1", "work2"]),
+    });
+
+  it("persists a within-group reorder without rewriting other groups or hidden keys", () => {
+    const target = resolve("work2", "work1")!;
+    const result = plan("work2", target);
+    expect(result.kind).toBe("move-active");
+    if (result.kind !== "move-active") return;
+    expect(result.order).toEqual(["input", "work2", "work1", "failed", "done1", "done2"]);
+    expect(result.assignments.map(({ id }) => id)).toEqual(["work2", "work1"]);
+    expect(result.assignments.every(({ orderKey }) => orderKey !== "V")).toBe(true);
+    const saved = new Map(result.assignments.map(({ id, orderKey }) => [id, orderKey]));
+    expect(
+      sortThreadsForSidebar(
+        ["work1", "work2"].map((id) => ({
+          id,
+          createdAt: "2026-03-09T08:00:00.000Z",
+          activeOrderKey: saved.get(id),
+        })),
+      ).map(({ id }) => id),
+    ).toEqual(["work2", "work1"]);
+  });
+
+  it.each([
+    ["work2", "input"],
+    ["work1", "failed"],
+    ["done2", "done1"],
+  ])(
+    "rejects an arbitrary active position from %s to %s in drop resolution and preview",
+    (source, over) => {
+      expect(resolve(source!, over!)).toBeNull();
+      const result = preview(
+        { items, resolveTarget: resolve, settledOrder: [], settledExpanded: false },
+        source!,
+        over!,
+      );
+      expect([...result.values()].every((transform) => transform?.y === 0)).toBe(true);
+    },
+  );
+
+  it("opens boundary label space on ended pickup without allowing reorder", () => {
+    const target = resolve("done1", "done1")!;
+    expect(plan("done1", target).kind).toBe("none");
+    const result = preview(
+      {
+        items,
+        resolveTarget: resolve,
+        settledOrder: [],
+        settledExpanded: false,
+        boundaryLabelHeight: 16,
+      },
+      "done1",
+      "done1",
+    );
+    expect(result.get("input")?.y).toBe(32);
+  });
+
+  it.each(["done1", "failed"])("lets %s leave active for pinned or settled", (source) => {
+    expect(plan(source, resolve(source, sidebarMarkerId("pinned-header"))!).kind).toBe("pin");
+    expect(plan(source, resolve(source, sidebarMarkerId("settled-header"))!).kind).toBe("settle");
+  });
+
+  it("refreshes the active gap after another thread completes between pickup and release", () => {
+    const base = {
+      createdAt: "2026-03-09T08:00:00.000Z",
+      updatedAt: "2026-03-09T08:00:00.000Z",
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      session: null,
+      latestTurn: null,
+      pinnedAt: null as string | null,
+      backgroundLiveness: undefined as "working" | undefined,
+      pinOrderKey: null,
+      activeOrderKey: null,
+      settledAt: null,
+      settledOverride: null,
+      unsettledAt: null,
+      snoozedAt: null,
+      snoozedUntil: null,
+    };
+    const pickupAt = "2026-03-09T12:00:00.000Z";
+    const completionAt = "2026-03-09T12:00:05.000Z";
+    const releaseAt = "2026-03-09T12:00:10.000Z";
+    const source: typeof base & { id: string } = {
+      ...base,
+      id: "source",
+      pinnedAt: base.createdAt,
+    };
+    const working: typeof source = { ...base, id: "other", backgroundLiveness: "working" };
+    const completed: typeof source = { ...base, id: "other", updatedAt: completionAt };
+    const options = (now: string) => ({
+      now,
+      lastVisitedAt: () => undefined,
+      hasUnsentText: () => false,
+    });
+    const key = (row: { id: string }) => row.id;
+    expect(projectSidebarActiveDropOrder(source, [working], key, options(pickupAt))).toEqual([
+      "other",
+      "source",
+    ]);
+    // Keeping pickup time after the completion would advertise the wrong gap.
+    expect(projectSidebarActiveDropOrder(source, [completed], key, options(pickupAt))).toEqual([
+      "other",
+      "source",
+    ]);
+    const rows = [
+      pinnedHeader,
+      thread("source", "pinned"),
+      divider,
+      thread("other", "active"),
+      settledHeader,
+    ];
+    const targetAt = (now: string) =>
+      constrainSidebarDropTarget({
+        target: resolveSidebarDropTarget(rows, "source", "other"),
+        activeKey: "source",
+        activeSection: "pinned",
+        activeOrder: ["other"],
+        groups: new Map([["other", "ended"]]),
+        enteringActiveOrder: projectSidebarActiveDropOrder(source, [completed], key, options(now)),
+      })!;
+    const refreshedTarget = targetAt("2026-03-09T12:00:06.000Z");
+    const releaseTarget = targetAt(releaseAt);
+    expect(refreshedTarget.activeOrder).toEqual(["source", "other"]);
+    expect(releaseTarget.activeOrder).toEqual(refreshedTarget.activeOrder);
+    const transforms = (target: typeof releaseTarget) =>
+      preview(
+        {
+          items: rows,
+          resolveTarget: () => target,
+          settledOrder: [],
+          settledExpanded: false,
+        },
+        "source",
+        "other",
+      );
+    expect(transforms(refreshedTarget)).toEqual(transforms(releaseTarget));
+    expect(transforms(releaseTarget).get("other")?.y).toBeGreaterThan(
+      transforms(targetAt(pickupAt)).get("other")!.y,
+    );
+    expect(plan("source", releaseTarget, "pinned")).toMatchObject({
+      kind: "move-active",
+      order: ["source", "other"],
+      assignments: [],
+      unpin: true,
+    });
+    const optimistic = applySidebarThreadDrop(source, "active", releaseAt);
+    const server = { ...source, pinnedAt: null, updatedAt: "2026-03-09T12:00:11.000Z" };
+    for (const result of [optimistic, server]) {
+      expect(
+        orderSidebarThreadsByStatus(
+          sortThreadsForSidebar([completed, result]),
+          options(releaseAt),
+        ).map(key),
+      ).toEqual(releaseTarget.activeOrder);
+    }
+  });
+
+  it("withdraws the settle target when another client settles the dragged source", () => {
+    const source = { activeKey: "work1", activeSection: "active" as const };
+    const targetId = sidebarMarkerId("settled-header");
+    expect(isSidebarDragSourceValid(items, source)).toBe(true);
+    expect(resolveSidebarDropVerb(source.activeSection, resolve("work1", targetId)!.section)).toBe(
+      "settle",
+    );
+    const updatedRows = [
+      ...items.filter((item) => sidebarListItemId(item) !== source.activeKey),
+      thread(source.activeKey, "settled"),
+    ];
+    expect(isSidebarDragSourceValid(updatedRows, source)).toBe(false);
+    const resolveAfterUpdate = (activeKey: string, overId: string) =>
+      isSidebarDragSourceValid(updatedRows, source)
+        ? resolveSidebarDropTarget(updatedRows, activeKey, overId)
+        : null;
+    const target = resolveAfterUpdate(source.activeKey, targetId);
+    expect(target).toBeNull();
+    expect(resolveSidebarDropVerb(source.activeSection, target?.section ?? null)).toBeNull();
+    const transforms = preview(
+      {
+        items: updatedRows,
+        resolveTarget: resolveAfterUpdate,
+        settledOrder: [source.activeKey],
+        settledExpanded: true,
+      },
+      source.activeKey,
+      targetId,
+    );
+    expect([...transforms.values()].every((transform) => transform?.y === 0)).toBe(true);
+    const { rects, activeIndex, overIndex } = layout(updatedRows, source.activeKey, targetId);
+    const collisionRect = rects[overIndex]!;
+    const detector = createSidebarCollisionDetection(
+      (id) => resolveAfterUpdate(source.activeKey, id) !== null,
+    );
+    const collisions = detector({
+      active: {
+        id: source.activeKey,
+        data: { current: {} },
+        rect: { current: { initial: rects[activeIndex]!, translated: collisionRect } },
+      },
+      collisionRect,
+      droppableRects: new Map(
+        updatedRows.map((item, index) => [sidebarListItemId(item), rects[index]!]),
+      ),
+      droppableContainers: updatedRows.map((item, index) => ({
+        id: sidebarListItemId(item),
+        key: sidebarListItemId(item),
+        disabled: false,
+        data: { current: {} },
+        node: { current: null },
+        rect: { current: rects[index]! },
+      })),
+      pointerCoordinates: null,
+    });
+    expect(collisions.map(({ id }) => id)).toEqual([source.activeKey]);
+  });
+
+  it.each(
+    (["pinned", "settled", "snoozed"] as const).flatMap((section) =>
+      (["ended", "failed"] as const).map((status) => ({ section, status })),
+    ),
+  )(
+    "uses projected lifecycle state for a $status $section thread's active gap, drop and final order",
+    ({ section, status }) => {
+      const now = "2026-03-09T12:00:00.000Z";
+      const earlier = "2026-03-09T08:00:00.000Z";
+      const base = {
+        createdAt: earlier,
+        updatedAt: earlier,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        session: null,
+        latestTurn: null,
+        pinnedAt: null,
+        pinOrderKey: null,
+        activeOrderKey: null,
+        settledAt: null,
+        settledOverride: null,
+        unsettledAt: null,
+        snoozedAt: null,
+        snoozedUntil: null,
+      };
+      const source = {
+        ...base,
+        id: "source",
+        session:
+          status === "failed"
+            ? {
+                threadId: ThreadId.make("source"),
+                providerInstanceId: ProviderInstanceId.make("codex"),
+                providerName: "Codex",
+                runtimeMode: DEFAULT_RUNTIME_MODE,
+                status: "error" as const,
+                activeTurnId: null,
+                lastError: "Failed",
+                updatedAt: earlier,
+              }
+            : null,
+        pinnedAt: section === "pinned" ? earlier : null,
+        settledOverride: section === "settled" ? ("settled" as const) : null,
+        snoozedUntil: section === "snoozed" ? "2026-03-09T11:00:00.000Z" : null,
+      };
+      const live = [
+        { ...base, id: "working", backgroundLiveness: "working" as const },
+        { ...base, id: "newer", updatedAt: "2026-03-09T10:00:00.000Z" },
+      ];
+      const options = { now, lastVisitedAt: () => undefined, hasUnsentText: () => false };
+      const projected = applySidebarThreadDrop(source, "active", now);
+      expect(projected.snoozedUntil).toBeNull();
+      expect(projected.unsettledAt).toBe(section === "settled" ? now : null);
+      const canonical = orderSidebarThreadsByStatus(
+        sortThreadsForSidebar([...live, projected]),
+        options,
+      ).map(({ id }) => id);
+      expect(canonical).toEqual(["working", "source", "newer"]);
+      const rows = [
+        pinnedHeader,
+        ...(section === "pinned" ? [thread("source", section)] : []),
+        divider,
+        ...live.map(({ id }) => thread(id, "active")),
+        ...(section === "snoozed" ? [marker("snoozed-header"), thread("source", section)] : []),
+        settledHeader,
+        ...(section === "settled" ? [thread("source", section)] : []),
+      ];
+      const targetFor = (activeKey: string, overId: string) =>
+        constrainSidebarDropTarget({
+          target: resolveSidebarDropTarget(rows, activeKey, overId),
+          activeKey,
+          activeSection: section,
+          activeOrder: live.map(({ id }) => id),
+          groups: new Map(live.map((row) => [row.id, sidebarActiveGroup(row, options)])),
+          enteringActiveOrder: canonical,
+        });
+      const target = targetFor("source", "working")!;
+      const result = plan("source", target, section);
+      expect(result).toMatchObject({
+        kind: "move-active",
+        order: canonical,
+        assignments: [],
+        unpin: section === "pinned",
+        unsettle: section === "settled",
+        unsnooze: section === "snoozed",
+      });
+      // Hovering over either active row must open the same canonical gap.
+      const input = {
+        items: rows,
+        resolveTarget: targetFor,
+        settledOrder: [],
+        settledExpanded: true,
+      };
+      expect(preview(input, "source", "working")).toEqual(preview(input, "source", "newer"));
+      const geometry = layout(rows, "source", "working");
+      const transforms = preview(input, "source", "working");
+      const workingIndex = rows.findIndex((row) => sidebarListItemId(row) === "working");
+      const newerIndex = rows.findIndex((row) => sidebarListItemId(row) === "newer");
+      const workingBottom = geometry.rects[workingIndex]!.bottom + transforms.get("working")!.y;
+      const newerTop = geometry.rects[newerIndex]!.top + transforms.get("newer")!.y;
+      expect(newerTop - workingBottom).toBe(84); // One full active card plus row gaps.
+      // These are the fields written by the unpin/unsettle/unsnooze reducers.
+      const serverNow = "2026-03-09T12:00:01.000Z";
+      const final = {
+        ...source,
+        pinnedAt: null,
+        pinOrderKey: null,
+        snoozedAt: null,
+        snoozedUntil: null,
+        settledOverride: section === "settled" ? ("active" as const) : null,
+        settledAt: null,
+        unsettledAt: section === "settled" ? serverNow : null,
+        updatedAt: serverNow,
+      };
+      expect(
+        orderSidebarThreadsByStatus(sortThreadsForSidebar([...live, final]), options).map(
+          ({ id }) => id,
+        ),
+      ).toEqual(canonical);
+    },
+  );
 });

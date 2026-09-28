@@ -9,7 +9,10 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/unstable/reactivity";
-import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  planPinnedReorder,
+  sortActiveThreadsByOrderKey as sortThreadsForSidebar,
+} from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
   threadWokeAt,
@@ -22,7 +25,6 @@ import {
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
-import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 
 export function shouldNavigateAfterThreadPark(input: {
@@ -124,8 +126,8 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 
 // Rows and section markers share one sortable list. The separators resolve
 // the lifecycle action; Sidebar.drag previews the resulting layout. Pinned
-// and active threads keep the dragged position; settled threads use time
-// order. Snoozed rows can leave the shelf, but dropping into it is not
+// threads keep the dragged position; active threads stay in status groups.
+// Settled threads use time order. Snoozed rows can leave the shelf, but dropping into it is not
 // supported because snoozing requires a wake time.
 
 export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
@@ -157,6 +159,19 @@ export function sidebarListItemId(item: SidebarListItem): string {
   return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
 }
 
+/** A concurrent section change invalidates the gesture, even if its row stays visible. */
+export function isSidebarDragSourceValid(
+  items: readonly SidebarListItem[],
+  source: { readonly activeKey: string; readonly activeSection: SidebarSection },
+): boolean {
+  return items.some(
+    (item) =>
+      item.kind === "thread" &&
+      item.key === source.activeKey &&
+      item.section === source.activeSection,
+  );
+}
+
 /** The section a slot belongs to, read off the markers around it: from
     the top down, everything before the pinned divider is pinned, then the
     inbox until the snoozed header, the shelf until the settled header,
@@ -179,6 +194,8 @@ export type SidebarDropTarget = {
   readonly section: "pinned" | "active" | "settled";
   readonly pinnedOrder: readonly string[];
   readonly activeOrder: readonly string[];
+  /** Only these active rows may receive order keys; empty for lifecycle-only entry. */
+  readonly activeReorderKeys?: ReadonlySet<string>;
 };
 
 export function resolveSidebarDropTarget(
@@ -204,6 +221,40 @@ export function resolveSidebarDropTarget(
     else activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
+}
+
+/** Apply active-list constraints once for collision, preview and commit. */
+export function constrainSidebarDropTarget(input: {
+  readonly target: SidebarDropTarget | null;
+  readonly activeKey: string;
+  readonly activeSection: SidebarSection;
+  readonly activeOrder: readonly string[];
+  readonly groups: ReadonlyMap<string, SidebarActiveGroup>;
+  readonly enteringActiveOrder: readonly string[];
+}): SidebarDropTarget | null {
+  const { target, activeKey, activeSection, activeOrder, groups } = input;
+  if (target === null || target.section !== "active") return target;
+  if (activeSection !== "active") {
+    return { ...target, activeOrder: input.enteringActiveOrder, activeReorderKeys: new Set() };
+  }
+  const group = groups.get(activeKey);
+  if (group === undefined) return null;
+  if (group === "ended") {
+    // Pickup still opens the section labels, without offering an active reorder.
+    return target.activeOrder.every((key, index) => key === activeOrder[index])
+      ? { ...target, activeReorderKeys: new Set() }
+      : null;
+  }
+  // Crossing any other group would advertise a position the canonical sort rejects.
+  if (
+    target.activeOrder.some((key, index) => groups.get(key) !== groups.get(activeOrder[index]!))
+  ) {
+    return null;
+  }
+  return {
+    ...target,
+    activeReorderKeys: new Set(activeOrder.filter((key) => groups.get(key) === group)),
+  };
 }
 
 export type SidebarThreadDropPlan =
@@ -292,8 +343,9 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
+      const reorderKeys = target.activeReorderKeys;
       const assignments = planPinnedReorder({
-        orderedIds: order,
+        orderedIds: reorderKeys ? order.filter((key) => reorderKeys.has(key)) : order,
         keysById: activeKeysById,
         movedId: activeKey,
       });
@@ -359,10 +411,11 @@ export function applySidebarThreadDrop<
     | "settledAt"
     | "settledOverride"
     | "unsettledAt"
+    | "updatedAt"
   >,
 >(thread: T, section: "pinned" | "active" | "settled", now: string, orderKey?: string): T {
   const wasSettled = thread.settledOverride === "settled";
-  const awake = { ...thread, snoozedAt: null, snoozedUntil: null };
+  const awake = { ...thread, snoozedAt: null, snoozedUntil: null, updatedAt: now };
   if (section === "settled") {
     return {
       ...awake,
@@ -803,7 +856,9 @@ export function shouldRecedeSidebarThread(input: {
   isWoke: boolean;
   isActive: boolean;
   isSelected: boolean;
+  hasUnsentDraft?: boolean;
 }): boolean {
+  if (input.hasUnsentDraft) return false;
   if (input.isActive || input.isSelected || input.status === "input") return false;
   if (input.status === "working" || input.status === "monitoring") return true;
   if (input.status === "ready" || input.status === "approval") {
@@ -885,45 +940,71 @@ export function isSidebarThreadWoke(input: {
   );
 }
 
+type SidebarActiveThread = SidebarThreadStatusInput &
+  ThreadSnoozeShell &
+  Pick<SidebarThreadSummary, "settledOverride" | "createdAt" | "updatedAt">;
+
+type SidebarActiveOrderOptions<T> = {
+  readonly now: string;
+  readonly lastVisitedAt: (thread: T) => string | undefined;
+  readonly hasUnsentText: (thread: T) => boolean;
+};
+
+/** Use the projection's timestamp for both lifecycle fields and status ordering. */
+export function projectSidebarActiveDropOrder<
+  T extends SidebarActiveThread &
+    Parameters<typeof applySidebarThreadDrop>[0] & { readonly id: string },
+>(
+  source: T,
+  activeThreads: readonly T[],
+  key: (thread: T) => string,
+  options: SidebarActiveOrderOptions<T>,
+): string[] {
+  return orderSidebarThreadsByStatus(
+    sortThreadsForSidebar([
+      ...activeThreads.filter((thread) => key(thread) !== key(source)),
+      applySidebarThreadDrop(source, "active", options.now),
+    ]),
+    options,
+  ).map(key);
+}
+
+export type SidebarActiveGroup = "writing" | "waiting" | "working" | "failed" | "ended" | "woke";
+
+export function sidebarActiveGroup<T extends SidebarActiveThread>(
+  thread: T,
+  options: SidebarActiveOrderOptions<T>,
+): SidebarActiveGroup {
+  if (options.hasUnsentText(thread)) return "writing";
+  const status = resolveSidebarThreadStatus(thread);
+  if (status === "approval" || status === "input") return "waiting";
+  if (status === "working" || status === "monitoring") return "working";
+  if (status === "failed") return "failed";
+  return isSidebarThreadWoke({
+    wokeAt: threadWokeAt(thread, options),
+    lastVisitedAt: options.lastVisitedAt(thread),
+    settledOverride: thread.settledOverride,
+  })
+    ? "woke"
+    : "ended";
+}
+
 /** Group an already arranged active list by status. Finished threads use
     completion time; other groups preserve their arranged positions. */
-export function orderSidebarThreadsByStatus<
-  T extends SidebarThreadStatusInput &
-    ThreadSnoozeShell &
-    Pick<SidebarThreadSummary, "settledOverride" | "createdAt" | "updatedAt">,
->(
+export function orderSidebarThreadsByStatus<T extends SidebarActiveThread>(
   threads: readonly T[],
-  options: {
-    readonly now: string;
-    readonly lastVisitedAt: (thread: T) => string | undefined;
-    readonly hasUnsentText: (thread: T) => boolean;
-  },
+  options: SidebarActiveOrderOptions<T>,
 ): T[] {
-  const writing: T[] = [];
-  const waiting: T[] = [];
-  const working: T[] = [];
-  const ended: T[] = [];
-  const woke: T[] = [];
-  for (const thread of threads) {
-    if (options.hasUnsentText(thread)) {
-      writing.push(thread);
-      continue;
-    }
-    const status = resolveSidebarThreadStatus(thread);
-    if (status === "approval" || status === "input") waiting.push(thread);
-    else if (status === "working" || status === "monitoring") working.push(thread);
-    else if (
-      status === "ready" &&
-      isSidebarThreadWoke({
-        wokeAt: threadWokeAt(thread, options),
-        lastVisitedAt: options.lastVisitedAt(thread),
-        settledOverride: thread.settledOverride,
-      })
-    )
-      woke.push(thread);
-    else ended.push(thread);
-  }
-  const newestEnded = ended
+  const groups: Record<SidebarActiveGroup, T[]> = {
+    writing: [],
+    waiting: [],
+    working: [],
+    failed: [],
+    ended: [],
+    woke: [],
+  };
+  for (const thread of threads) groups[sidebarActiveGroup(thread, options)].push(thread);
+  const newestEnded = groups.ended
     .map((thread) => ({
       thread,
       timestamp: firstValidTimestampMs(
@@ -935,7 +1016,14 @@ export function orderSidebarThreadsByStatus<
     }))
     .sort((left, right) => right.timestamp - left.timestamp)
     .map(({ thread }) => thread);
-  return [...writing, ...waiting, ...working, ...newestEnded, ...woke];
+  return [
+    ...groups.writing,
+    ...groups.waiting,
+    ...groups.working,
+    ...groups.failed,
+    ...newestEnded,
+    ...groups.woke,
+  ];
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
