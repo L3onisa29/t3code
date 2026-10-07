@@ -208,17 +208,17 @@ export class VoiceBudSessionRegistry {
     return true;
   });
 
-  readonly close = Effect.fn("VoiceBudSessionRegistry.close")(
-    function* (this: VoiceBudSessionRegistry): Effect.fn.Return<void> {
-      for (const { result } of this.#pendingBindings.values()) {
-        yield* Deferred.succeed(result.deferred, false);
-      }
-      for (const { result } of this.#pendingDeliveries.values()) {
-        yield* Deferred.succeed(result.deferred, false);
-      }
-      this.#pendingBindings.clear();
-      this.#pendingDeliveries.clear();
-      this.#bindings.clear();
-    },
-  );
+  readonly close = Effect.fn("VoiceBudSessionRegistry.close")(function* (
+    this: VoiceBudSessionRegistry,
+  ): Effect.fn.Return<void> {
+    for (const { result } of this.#pendingBindings.values()) {
+      yield* Deferred.succeed(result.deferred, false);
+    }
+    for (const { result } of this.#pendingDeliveries.values()) {
+      yield* Deferred.succeed(result.deferred, false);
+    }
+    this.#pendingBindings.clear();
+    this.#pendingDeliveries.clear();
+    this.#bindings.clear();
+  });
 }

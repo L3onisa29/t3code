@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { describe } from "vite-plus/test";
 
 import { migrationManifest, runMigrations } from "../Migrations.ts";
@@ -26,6 +26,8 @@ describe("056_RepairVoiceBudFilesViewedCollision", () => {
     "voicebud-53",
     "voicebud-54",
     "voicebud-55",
+    "voicebud-56",
+    "voicebud-57",
     "legacy-50",
     "legacy-51",
   ] as const) {
@@ -48,7 +50,16 @@ describe("056_RepairVoiceBudFilesViewedCollision", () => {
         } else {
           yield* runMigrations({ toMigrationInclusive: 52 });
           yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (53, 'BackfillProjectionThreadLatestTurn')`;
-          yield* runMigrations({ toMigrationInclusive: Number(source.split("-")[1]) });
+          const last = Number(source.split("-")[1]);
+          for (const [id, name] of [
+            [54, "RepairVoiceBudMigrationCollisions"],
+            [55, "RepairVoiceBudUpstreamMigrationCollisions"],
+            [56, "RepairVoiceBudFilesViewedCollision"],
+            [57, "ProjectionThreadsAutoSettleDisabledAt"],
+          ] as const) {
+            if (id <= last)
+              yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+          }
         }
 
         yield* sql`
@@ -72,8 +83,8 @@ describe("056_RepairVoiceBudFilesViewedCollision", () => {
 
         const executed = yield* runMigrations();
         assert.deepStrictEqual(
-          executed.find(([id]) => id === 56),
-          [56, "RepairVoiceBudFilesViewedCollision"],
+          executed,
+          migrationManifest.filter(([id]) => id > Number(historyBefore.at(-1)?.migration_id ?? 0)),
         );
         assert.deepStrictEqual(
           yield* sql`SELECT thread_id, latest_turn_id FROM projection_threads ORDER BY thread_id`,
@@ -90,6 +101,13 @@ describe("056_RepairVoiceBudFilesViewedCollision", () => {
         const historyAfter = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
         assert.deepStrictEqual(historyAfter.slice(0, historyBefore.length), historyBefore);
 
+        // The skipped V2/webhook slots must be usable, not merely recorded.
+        yield* sql`INSERT INTO orchestration_v2_events (event_id, thread_id, event_type, occurred_at, payload_json) VALUES ('event-test', 'missing', 'test', '2026-09-24T12:00:00.000Z', '{}')`;
+        const scheduledColumns = yield* sql<{
+          readonly name: string;
+        }>`PRAGMA table_info(scheduled_tasks)`;
+        assert.ok(scheduledColumns.some((column) => column.name === "webhook_token"));
+        assert.ok(scheduledColumns.some((column) => column.name === "webhook_secret"));
         const schemaAfter =
           yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
         yield* repair;

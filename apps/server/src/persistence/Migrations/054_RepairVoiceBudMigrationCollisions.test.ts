@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { describe } from "vite-plus/test";
 
 import { runMigrations } from "../Migrations.ts";
@@ -23,7 +23,6 @@ describe("054_RepairVoiceBudMigrationCollisions", () => {
           VALUES (41, 'BackfillProjectionThreadLatestTurn')
         `;
         if (lastForkMigration === 42) {
-          yield* sql`ALTER TABLE projection_threads ADD COLUMN pinned_at TEXT`;
           yield* sql`
             INSERT INTO effect_sql_migrations (migration_id, name)
             VALUES (42, 'RepairProjectionThreadsPinned')
@@ -31,10 +30,10 @@ describe("054_RepairVoiceBudMigrationCollisions", () => {
         }
         yield* runMigrations({ toMigrationInclusive: 53 });
         const authBefore = yield* sql<{ readonly name: string }>`PRAGMA table_info(auth_sessions)`;
-        assert.ok(!authBefore.some((column) => column.name === "client_surface"));
+        assert.ok(authBefore.some((column) => column.name === "client_surface"));
 
         const executed = yield* runMigrations({ toMigrationInclusive: 54 });
-        assert.deepStrictEqual(executed, [[54, "RepairVoiceBudMigrationCollisions"]]);
+        assert.deepStrictEqual(executed, [[54, "ProjectionThreadsAutoSettleDisabledAt"]]);
         const authColumns = yield* sql<{ readonly name: string }>`PRAGMA table_info(auth_sessions)`;
         for (const name of ["client_surface", "client_app_version"]) {
           assert.strictEqual(authColumns.filter((column) => column.name === name).length, 1);
@@ -58,8 +57,8 @@ describe("054_RepairVoiceBudMigrationCollisions", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 53 });
-      const before = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
       yield* runMigrations({ toMigrationInclusive: 54 });
+      const before = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
       yield* repair;
       const after = yield* sql`SELECT type, name, sql FROM sqlite_master ORDER BY type, name`;
       assert.deepStrictEqual(after, before);

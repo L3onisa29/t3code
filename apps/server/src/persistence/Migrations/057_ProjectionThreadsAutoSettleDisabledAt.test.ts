@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { describe } from "vite-plus/test";
 
 import { migrationManifest, runMigrations } from "../Migrations.ts";
@@ -27,7 +27,11 @@ describe("057_ProjectionThreadsAutoSettleDisabledAt", () => {
         const sql = yield* SqlClient.SqlClient;
         const now = "2026-01-01T00:00:00.000Z";
         if (source === "voicebud-56") {
-          yield* runMigrations({ toMigrationInclusive: 56 });
+          yield* runMigrations({ toMigrationInclusive: 53 });
+          yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+            (54, 'RepairVoiceBudMigrationCollisions'),
+            (55, 'RepairVoiceBudUpstreamMigrationCollisions'),
+            (56, 'RepairVoiceBudFilesViewedCollision')`;
           const columns = yield* sql<{
             readonly name: string;
           }>`PRAGMA table_info(projection_threads)`;

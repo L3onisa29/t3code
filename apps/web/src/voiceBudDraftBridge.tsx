@@ -40,12 +40,22 @@ export function applyVoiceBudTranscription(
   event: VoiceBudTranscriptionEvent,
   threadExists: (threadRef: ScopedThreadRef) => boolean = (threadRef) =>
     readThreadShell(threadRef) !== null && readThreadStatus(threadRef) !== "deleted",
+  currentTarget: ComposerTarget | null = activeTarget,
 ): boolean {
   const target = toComposerTarget(event.target);
   if (typeof target !== "string" && !threadExists(target)) {
     return false;
   }
-  return useComposerDraftStore.getState().appendPrompt(target, event.transcript);
+  const store = useComposerDraftStore.getState();
+  // Queued edits have no draft session. An empty edit only exists in the
+  // mounted composer, so accept it while that composer still owns the target.
+  if (typeof target === "string" && currentTarget === target && !store.getComposerDraft(target)) {
+    const prompt = event.transcript.trim();
+    if (prompt.length === 0) return false;
+    store.setPrompt(target, prompt);
+    return true;
+  }
+  return store.appendPrompt(target, event.transcript);
 }
 
 /**

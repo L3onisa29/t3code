@@ -103,6 +103,37 @@ describe("VoiceBud draft delivery", () => {
     expect(useComposerDraftStore.getState().draftsByThreadKey).toEqual({});
   });
 
+  it("dictates into a queued edit without changing the thread draft and rejects cancelled edits", () => {
+    const store = useComposerDraftStore.getState();
+    const edit = DraftId.make("queued-edit:environment-a:thread-a:run-a");
+    store.setPrompt(THREAD_A, "thread draft");
+    store.setPrompt(edit, "queued message");
+    const event = transcription(
+      { _tag: "Draft", draftId: VoiceBudDraftId.make(edit) },
+      "dictation",
+    );
+    expect(applyVoiceBudTranscription(event)).toBe(true);
+    expect(store.getComposerDraft(edit)?.prompt).toBe("queued message dictation");
+    expect(store.getComposerDraft(THREAD_A)?.prompt).toBe("thread draft");
+    store.clearComposerContent(edit);
+    expect(applyVoiceBudTranscription(event)).toBe(false);
+    expect(store.getComposerDraft(THREAD_A)?.prompt).toBe("thread draft");
+  });
+
+  it("supports empty queued edits only while their composer still owns the target", () => {
+    const store = useComposerDraftStore.getState();
+    const edit = DraftId.make("queued-edit:environment-a:thread-a:run-empty");
+    const event = transcription(
+      { _tag: "Draft", draftId: VoiceBudDraftId.make(edit) },
+      "dictation",
+    );
+    expect(applyVoiceBudTranscription(event, () => true, edit)).toBe(true);
+    expect(store.getComposerDraft(edit)?.prompt).toBe("dictation");
+    store.clearComposerContent(edit);
+    expect(applyVoiceBudTranscription(event, () => true, THREAD_A)).toBe(false);
+    expect(store.getComposerDraft(edit)).toBeNull();
+  });
+
   it("fails closed when the bound server thread no longer exists", () => {
     expect(
       applyVoiceBudTranscription(
