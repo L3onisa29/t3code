@@ -1155,7 +1155,7 @@ describe("orderSidebarThreadsByStatus", () => {
     const writing = { ...base, id: "writing" };
     const waiting = { ...base, id: "waiting", hasPendingUserInput: true };
     const ended = { ...base, id: "ended" };
-    const threads = [woke, ended, waiting, writing];
+    const threads = [ended, waiting, writing, woke];
     const custom = {
       ...options,
       hasUnsentText: (thread: { id: string }) => thread.id === "writing",
@@ -1164,22 +1164,22 @@ describe("orderSidebarThreadsByStatus", () => {
       threads,
     );
     expect(orderSidebarThreadsByStatus(threads, { ...custom, workingShelfEnabled: false })).toEqual(
-      [writing, waiting, ended, woke],
+      [woke, writing, waiting, ended],
     );
   });
 
   it("uses server visits to acknowledge Woke even when the local visit is older", () => {
-    const ended = { ...base, id: "ended", updatedAt: "2026-03-09T10:00:00.000Z" };
+    const ended = { ...base, id: "ended" };
     const localVisit = "2026-03-09T09:00:00.000Z";
     expect(
-      orderSidebarThreadsByStatus([woke, ended], { ...options, lastVisitedAt: () => localVisit }),
-    ).toEqual([ended, woke]);
+      orderSidebarThreadsByStatus([ended, woke], { ...options, lastVisitedAt: () => localVisit }),
+    ).toEqual([woke, ended]);
     expect(
-      orderSidebarThreadsByStatus([woke, ended], {
+      orderSidebarThreadsByStatus([ended, woke], {
         ...options,
         lastVisitedAt: () => resolveThreadLastVisitedAt(now, localVisit),
       }),
-    ).toEqual([woke, ended]);
+    ).toEqual([ended, woke]);
   });
 
   it("orders finished threads by completion time instead of creation or manual position", () => {
@@ -1198,10 +1198,10 @@ describe("orderSidebarThreadsByStatus", () => {
     };
     const waiting = { ...base, id: "waiting", hasPendingUserInput: true };
     expect(orderSidebarThreadsByStatus([older, woke, newer, waiting], options)).toEqual([
+      woke,
       waiting,
       newer,
       older,
-      woke,
     ]);
     expect(
       orderSidebarThreadsByStatus([older, newer], {
@@ -1234,7 +1234,7 @@ describe("orderSidebarThreadsByStatus", () => {
     ]);
   });
 
-  it("prioritizes waiting, working, failed, ended and woke while keeping each group's arrangement", () => {
+  it("prioritizes woke, waiting, working, failed and ended while keeping each group's arrangement", () => {
     const threads = [
       woke,
       { ...base, id: "done" },
@@ -1245,13 +1245,13 @@ describe("orderSidebarThreadsByStatus", () => {
       { ...base, id: "failed", runtime: { ...runtime, status: "failed" as const } },
     ];
     expect(orderSidebarThreadsByStatus(threads, options).map((thread) => thread.id)).toEqual([
+      "woke",
       "input",
       "approval",
       "working",
       "waiting-background",
       "failed",
       "done",
-      "woke",
     ]);
     expect(threads[0]).toBe(woke);
   });
@@ -1262,15 +1262,15 @@ describe("orderSidebarThreadsByStatus", () => {
     expect(orderSidebarThreadsByStatus([done, running], options)).toEqual([running, done]);
     const completed = { ...running, runtime: { ...runtime, status: "completed" as const } };
     expect(orderSidebarThreadsByStatus([done, completed], options)).toEqual([done, completed]);
-    expect(orderSidebarThreadsByStatus([woke, done], options)).toEqual([done, woke]);
+    expect(orderSidebarThreadsByStatus([done, woke], options)).toEqual([woke, done]);
     expect(
-      orderSidebarThreadsByStatus([woke, done], { ...options, lastVisitedAt: () => now }),
-    ).toEqual([woke, done]);
+      orderSidebarThreadsByStatus([done, woke], { ...options, lastVisitedAt: () => now }),
+    ).toEqual([done, woke]);
     const workingWake = { ...woke, runtime };
     expect(orderSidebarThreadsByStatus([done, workingWake], options)).toEqual([workingWake, done]);
   });
 
-  it("puts unsent composer text first and restores status order after sending or clearing it", () => {
+  it("puts woke ahead of unsent text and keeps it first after sending or clearing the text", () => {
     const threads = [
       { ...base, id: "input", hasPendingUserInput: true },
       { ...base, id: "working", runtime },
@@ -1282,12 +1282,36 @@ describe("orderSidebarThreadsByStatus", () => {
         ...options,
         hasUnsentText: (thread) => thread.id === "draft" || thread.id === "woke",
       }).map((thread) => thread.id),
-    ).toEqual(["draft", "woke", "input", "working"]);
+    ).toEqual(["woke", "draft", "input", "working"]);
     expect(orderSidebarThreadsByStatus(threads, options).map((thread) => thread.id)).toEqual([
+      "woke",
       "input",
       "working",
       "draft",
-      "woke",
+    ]);
+  });
+
+  it("keeps unacknowledged wakes above every status and draft until they are visited", () => {
+    const draft = { ...base, id: "draft" };
+    const approval = { ...base, id: "approval", runtime, hasPendingApprovals: true };
+    const wakingDraft = { ...woke, id: "waking-draft", runtime, hasPendingUserInput: true };
+    const threads = [draft, approval, wakingDraft, woke];
+    const custom = {
+      ...options,
+      hasUnsentText: (thread: { id: string }) =>
+        thread.id === "draft" || thread.id === "waking-draft",
+    };
+    expect(orderSidebarThreadsByStatus(threads, custom)).toEqual([
+      wakingDraft,
+      woke,
+      draft,
+      approval,
+    ]);
+    expect(orderSidebarThreadsByStatus(threads, { ...custom, lastVisitedAt: () => now })).toEqual([
+      draft,
+      wakingDraft,
+      approval,
+      woke,
     ]);
   });
 

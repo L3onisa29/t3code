@@ -1177,18 +1177,21 @@ export function sidebarActiveGroup<T extends SidebarActiveThread>(
   thread: T,
   options: SidebarActiveOrderOptions<T>,
 ): SidebarActiveGroup {
+  if (
+    isSidebarThreadWoke({
+      wokeAt: threadWokeAt(thread, options),
+      lastVisitedAt: options.lastVisitedAt(thread),
+      settledOverride: thread.settledOverride,
+    })
+  ) {
+    return "woke";
+  }
   if (options.hasUnsentText(thread)) return "writing";
   const status = resolveSidebarThreadStatus(thread);
   if (status === "approval" || status === "input") return "waiting";
   if (status === "working" || status === "waiting") return "working";
   if (status === "failed" || status === "limited") return "failed";
-  return isSidebarThreadWoke({
-    wokeAt: threadWokeAt(thread, options),
-    lastVisitedAt: options.lastVisitedAt(thread),
-    settledOverride: thread.settledOverride,
-  })
-    ? "woke"
-    : "ended";
+  return "ended";
 }
 
 /** Group an already arranged active list by status. Finished threads use
@@ -1222,12 +1225,12 @@ export function orderSidebarThreadsByStatus<T extends SidebarActiveThread>(
     .sort((left, right) => right.timestamp - left.timestamp)
     .map(({ thread }) => thread);
   return [
+    ...groups.woke,
     ...groups.writing,
     ...groups.waiting,
     ...groups.working,
     ...groups.failed,
     ...newestEnded,
-    ...groups.woke,
   ];
 }
 

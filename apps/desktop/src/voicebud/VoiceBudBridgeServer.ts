@@ -6,6 +6,7 @@ import {
   type VoiceBudRecordingId,
   type VoiceBudResponseCode,
 } from "@t3tools/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - The synchronous socket protocol needs constant-time HMAC verification.
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
 import * as Effect from "effect/Effect";
