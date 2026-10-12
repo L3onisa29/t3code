@@ -11,11 +11,12 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { runMigrations } from "./Migrations.ts";
+import { migrationManifest, runMigrations } from "./Migrations.ts";
 
 it.effect.each([
   [59, "059_McpAppModelContext", "mcp_app_model_context"],
   [60, "060_ThreadSnapshotWindowIndexes", "orchestration_v2_projection_nodes_live_idx"],
+  [61, "061_PullRequestReviewGuides", "pull_request_review_guides"],
 ] as const)(
   "retries migration %s after process loss and preserves the VoiceBud ledger",
   ([id, module, artifact]) =>
@@ -138,7 +139,7 @@ it.effect.each([
           );
           assert.equal(
             reopened.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get()?.id,
-            60,
+            migrationManifest.at(-1)?.[0],
           );
         } finally {
           reopened.close();
